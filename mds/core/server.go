@@ -14,6 +14,7 @@ import (
 
 	"github.com/gorilla/mux"
 
+	client "ddb/client/core"
 	filelog "ddb/lib/common/filelog"
 	log "ddb/lib/common/log"
 )
@@ -31,45 +32,13 @@ type Mds struct {
 	signalChannel chan os.Signal
 	errorChannel  chan error
 	log           *log.Log
+	kvs           KeyValueStorage
 }
 
 var globalMds Mds
 
 func GetMds() *Mds {
 	return &globalMds
-}
-
-type BaseRequest struct {
-	RequestId string `json:"requestId"`
-}
-
-type CreateKeyRequest struct {
-	BaseRequest
-}
-
-type SetKeyRequest struct {
-	BaseRequest
-	Value string `json:"value"`
-}
-
-type BaseResponse struct {
-	RequestId string `json:"requestId"`
-	Error     string `json:"error"`
-}
-
-type CreateKeyResponse struct {
-	BaseResponse
-	Id string `json:"id"`
-}
-
-type GetKeyResponse struct {
-	BaseResponse
-	Value string `json:"value"`
-}
-
-type StatKeyResponse struct {
-	BaseResponse
-	State string `json:"state"`
 }
 
 func decodeJson(w http.ResponseWriter, r *http.Request, v interface{}) error {
@@ -99,30 +68,24 @@ func errorToHttpStatus(err error) int {
 }
 
 func completeRequest(w http.ResponseWriter, requestId string, err error, v interface{}) {
+	GetMds().log.Pf(0, "request %s complete error %v", requestId, err)
+
 	w.Header().Set("Content-Type", "application/json")
 	if err != nil {
 		w.WriteHeader(errorToHttpStatus(err))
-		err = json.NewEncoder(w).Encode(&BaseResponse{RequestId: requestId, Error: err.Error()})
+		err = json.NewEncoder(w).Encode(&client.BaseResponse{RequestId: requestId, Error: err.Error()})
 		if err != nil {
 			panic(fmt.Sprintf("encode error failed, error %v", err))
 		}
 	} else {
 		w.WriteHeader(http.StatusOK)
 		switch tv := v.(type) {
-		case *StatKeyResponse:
-			resp := v.(*StatKeyResponse)
+		case *client.GetKeyResponse:
+			resp := v.(*client.GetKeyResponse)
 			resp.Error = ""
 			resp.RequestId = requestId
-		case *GetKeyResponse:
-			resp := v.(*GetKeyResponse)
-			resp.Error = ""
-			resp.RequestId = requestId
-		case *CreateKeyResponse:
-			resp := v.(*CreateKeyResponse)
-			resp.Error = ""
-			resp.RequestId = requestId
-		case *BaseResponse:
-			resp := v.(*BaseResponse)
+		case *client.BaseResponse:
+			resp := v.(*client.BaseResponse)
 			resp.Error = ""
 			resp.RequestId = requestId
 		default:
@@ -136,48 +99,35 @@ func completeRequest(w http.ResponseWriter, requestId string, err error, v inter
 	}
 }
 
-func createKey(w http.ResponseWriter, r *http.Request) {
-	var err error
-	var key *Key
-	req := &CreateKeyRequest{}
-	resp := &CreateKeyResponse{}
-	defer func() {
-		completeRequest(w, req.RequestId, err, resp)
-	}()
-
-	err = decodeJson(w, r, req)
-
-	key, err = GetMds().createKey()
-	if err != nil {
-		return
-	}
-
-	resp.Id = key.getId()
-	return
-}
-
 func setKey(w http.ResponseWriter, r *http.Request) {
 	var err error
 
-	req := &SetKeyRequest{}
-	resp := &BaseResponse{}
+	req := &client.SetKeyRequest{}
+	resp := &client.BaseResponse{}
 	defer func() {
 		completeRequest(w, req.RequestId, err, resp)
 	}()
 
 	vars := mux.Vars(r)
-	id, ok := vars["id"]
+	key, ok := vars["key"]
 	if !ok {
 		err = ErrBadRequest
 		return
 	}
+
+	GetMds().log.Pf(0, "request %s", req.RequestId)
 
 	err = decodeJson(w, r, req)
 	if err != nil {
 		return
 	}
 
-	err = GetMds().setKey(id, req.Value)
+	if key == "" || req.Value == "" {
+		err = ErrBadRequest
+		return
+	}
+
+	err = GetMds().kvs.Set(key, req.Value)
 	if err != nil {
 		return
 	}
@@ -188,8 +138,8 @@ func setKey(w http.ResponseWriter, r *http.Request) {
 func deleteKey(w http.ResponseWriter, r *http.Request) {
 	var err error
 
-	req := &BaseRequest{}
-	resp := &BaseResponse{}
+	req := &client.BaseRequest{}
+	resp := &client.BaseResponse{}
 	defer func() {
 		completeRequest(w, req.RequestId, err, resp)
 	}()
@@ -199,54 +149,29 @@ func deleteKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	GetMds().log.Pf(0, "request %s", req.RequestId)
+
 	vars := mux.Vars(r)
-	id, ok := vars["id"]
+	key, ok := vars["key"]
 	if !ok {
 		err = ErrBadRequest
 		return
 	}
 
-	err = GetMds().deleteKey(id)
-	return
-}
-
-func statKey(w http.ResponseWriter, r *http.Request) {
-	var err error
-	var key *Key
-
-	req := &BaseRequest{}
-	resp := &StatKeyResponse{}
-	defer func() {
-		completeRequest(w, req.RequestId, err, resp)
-	}()
-
-	err = decodeJson(w, r, req)
-	if err != nil {
-		return
-	}
-
-	vars := mux.Vars(r)
-	id, ok := vars["id"]
-	if !ok {
+	if key == "" {
 		err = ErrBadRequest
 		return
 	}
 
-	key, err = GetMds().lookupKey(id)
-	if err != nil {
-		return
-	}
-
-	resp.State = key.getState()
+	err = GetMds().kvs.Delete(key)
 	return
 }
 
 func getKey(w http.ResponseWriter, r *http.Request) {
 	var err error
-	var key *Key
 
-	req := &BaseRequest{}
-	resp := &StatKeyResponse{}
+	req := &client.BaseRequest{}
+	resp := &client.GetKeyResponse{}
 	defer func() {
 		completeRequest(w, req.RequestId, err, resp)
 	}()
@@ -256,19 +181,25 @@ func getKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	GetMds().log.Pf(0, "request %s", req.RequestId)
+
 	vars := mux.Vars(r)
-	id, ok := vars["id"]
+	key, ok := vars["key"]
 	if !ok {
 		err = ErrBadRequest
 		return
 	}
 
-	key, err = GetMds().lookupKey(id)
+	if key == "" {
+		err = ErrBadRequest
+		return
+	}
+
+	resp.Value, err = GetMds().kvs.Get(key)
 	if err != nil {
 		return
 	}
 
-	resp.State = key.getValue()
 	return
 }
 
@@ -315,6 +246,8 @@ func (mds *Mds) eventLoop() error {
 }
 
 func (mds *Mds) Run(params *MdsParameters) error {
+	mds.kvs = NewLocalKvs()
+
 	filelog, err := filelog.NewFileLog(params.LogFile)
 	if err != nil {
 		return err
@@ -345,11 +278,9 @@ func (mds *Mds) Run(params *MdsParameters) error {
 	dr.Handle("/debug/pprof/block", pprof.Handler("block"))
 
 	r := mux.NewRouter()
-	r.HandleFunc("/key/create", createKey).Methods("POST").HeadersRegexp("Content-Type", "application/json")
-	r.HandleFunc("/key/{id}/set", setKey).Methods("POST").HeadersRegexp("Content-Type", "application/json")
-	r.HandleFunc("/key/{id}/get", getKey).Methods("GET").HeadersRegexp("Content-Type", "application/json")
-	r.HandleFunc("/key/{id}/delete", deleteKey).Methods("POST").HeadersRegexp("Content-Type", "application/json")
-	r.HandleFunc("/key/{id}/state", statKey).Methods("GET").HeadersRegexp("Content-Type", "application/json")
+	r.HandleFunc("/set/{key}", setKey).Methods("POST").HeadersRegexp("Content-Type", "application/json")
+	r.HandleFunc("/get/{key}", getKey).Methods("GET").HeadersRegexp("Content-Type", "application/json")
+	r.HandleFunc("/delete/{key}", deleteKey).Methods("POST").HeadersRegexp("Content-Type", "application/json")
 
 	mds.debugServer = &http.Server{
 		Handler:      dr,
