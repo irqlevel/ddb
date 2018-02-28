@@ -54,7 +54,7 @@ func TestLsmCreateOpen(t *testing.T) {
 		t.Fatalf("Can't create tmp dir error %v", err)
 		return
 	}
-	defer os.Remove(rootPath)
+	//defer os.RemoveAll(rootPath)
 
 	lsm, err := NewLsm(rootPath)
 	if err != nil {
