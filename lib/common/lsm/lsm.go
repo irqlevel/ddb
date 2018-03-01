@@ -3,10 +3,11 @@ package lsm
 import (
 	"fmt"
 	"io"
-	"math"
+	"io/ioutil"
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"sync"
@@ -14,7 +15,8 @@ import (
 )
 
 var (
-	ErrNotFound = fmt.Errorf("Not found")
+	ErrNotFound            = fmt.Errorf("Not found")
+	ssTableFileNamePattern = regexp.MustCompile(`^lsm\_([0-9]+)\.sstable$`)
 )
 
 const (
@@ -35,7 +37,7 @@ type Lsm struct {
 }
 
 func (lsm *Lsm) shouldCompact() bool {
-	if !lsm.closing && len(lsm.nodeMap) > 10 {
+	if !lsm.closing && len(lsm.nodeMap) > 4 {
 		return true
 	}
 	return false
@@ -48,6 +50,10 @@ func (lsm *Lsm) compact(force bool, logTruncate bool) error {
 	defer lsm.lock.Unlock()
 
 	if !force && !lsm.shouldCompact() {
+		return nil
+	}
+
+	if len(lsm.nodeMap) == 0 {
 		return nil
 	}
 
@@ -67,39 +73,40 @@ func (lsm *Lsm) compact(force bool, logTruncate bool) error {
 }
 
 func (lsm *Lsm) mergeSsTables() error {
-	if len(lsm.ssTableMap) <= 1 {
-		return nil
+	for {
+		if len(lsm.ssTableMap) <= 1 {
+			return nil
+		}
+
+		lsm.time++
+		fmt.Printf("Merge %d\n", lsm.time)
+
+		ids := make([]int64, len(lsm.ssTableMap))
+		i := 0
+		for id := range lsm.ssTableMap {
+			ids[i] = id
+			i++
+		}
+
+		sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+
+		prevStId := ids[len(ids)-2]
+		currStId := ids[len(ids)-1]
+
+		prevSt := lsm.ssTableMap[prevStId]
+		currSt := lsm.ssTableMap[currStId]
+
+		st, err := mergeSsTable(prevSt, currSt, lsm.getSsTablePath(lsm.time))
+		if err != nil {
+			return err
+		}
+
+		lsm.ssTableMap[lsm.time] = st
+		delete(lsm.ssTableMap, prevStId)
+		delete(lsm.ssTableMap, currStId)
+		prevSt.Erase()
+		currSt.Erase()
 	}
-
-	lsm.time++
-	fmt.Printf("Merge %d\n", lsm.time)
-
-	ids := make([]int64, len(lsm.ssTableMap))
-	i := 0
-	for id := range lsm.ssTableMap {
-		ids[i] = id
-		i++
-	}
-
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
-
-	prevStId := ids[len(ids)-2]
-	currStId := ids[len(ids)-1]
-
-	prevSt := lsm.ssTableMap[prevStId]
-	currSt := lsm.ssTableMap[currStId]
-
-	st, err := mergeSsTable(prevSt, currSt, lsm.getSsTablePath(lsm.time))
-	if err != nil {
-		return err
-	}
-
-	lsm.ssTableMap[lsm.time] = st
-	delete(lsm.ssTableMap, prevStId)
-	delete(lsm.ssTableMap, currStId)
-	prevSt.Erase()
-	currSt.Erase()
-	return nil
 }
 
 func (lsm *Lsm) mergeSsTablesWithLock() error {
@@ -165,7 +172,6 @@ func (lsm *Lsm) lookupSsTables(key string) (string, error) {
 	for _, id := range ids {
 		st := lsm.ssTableMap[id]
 
-		fmt.Printf("lookup %s at %d\n", key, id)
 		value, err := st.Get(key)
 		if err == nil {
 			return value, nil
@@ -227,7 +233,7 @@ func (lsm *Lsm) Close() {
 	defer lsm.lock.Unlock()
 
 	fmt.Printf("Close\n")
-	//lsm.mergeSsTables()
+	lsm.mergeSsTables()
 	lsm.closeSsTables()
 	lsm.logFile.Close()
 }
@@ -285,17 +291,39 @@ func (lsm *Lsm) closeSsTables() {
 }
 
 func (lsm *Lsm) openSsTables() error {
-	for i := int64(1); i < math.MaxInt64; i++ {
-		st, err := openSsTable(lsm.getSsTablePath(i))
+	files, err := ioutil.ReadDir(lsm.rootPath)
+	if err != nil {
+		return err
+	}
+
+	for _, file := range files {
+		if file.IsDir() {
+			continue
+		}
+
+		match := ssTableFileNamePattern.FindStringSubmatch(file.Name())
+		if match == nil || len(match) == 1 {
+			continue
+		}
+
+		index, err := strconv.ParseInt(match[1], 10, 64)
+		if err != nil {
+			continue
+		}
+
+		st, err := openSsTable(lsm.getSsTablePath(index))
 		if err != nil {
 			if os.IsNotExist(err) {
 				return nil
 			}
 			return err
 		}
-		lsm.ssTableMap[i] = st
-		lsm.time = i
+		lsm.ssTableMap[index] = st
+		if index > lsm.time {
+			lsm.time = index
+		}
 	}
+
 	return nil
 }
 
@@ -335,8 +363,6 @@ func OpenLsm(rootPath string) (*Lsm, error) {
 		fmt.Printf("open tables error %v\n", err)
 		return nil, err
 	}
-
-	fmt.Printf("lsm time %d\n", lsm.time)
 
 	err = lsm.restoreFromLog(logFile)
 	if err != nil {

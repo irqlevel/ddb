@@ -149,7 +149,6 @@ func mergeSsTable(prevSt *SsTable, currSt *SsTable, newFilePath string) (*SsTabl
 
 	newFile, err = os.OpenFile(newFilePath, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
-		fmt.Printf("Create table %s (merge)\n", newFile)
 		return nil, err
 	}
 
@@ -157,7 +156,7 @@ func mergeSsTable(prevSt *SsTable, currSt *SsTable, newFilePath string) (*SsTabl
 
 	for {
 		if prevNode == nil && prevFile != nil {
-			prevNode := new(LsmNode)
+			prevNode = new(LsmNode)
 			err = prevNode.ReadFrom(prevFile)
 			if err != nil {
 				if err != io.EOF {
@@ -170,7 +169,7 @@ func mergeSsTable(prevSt *SsTable, currSt *SsTable, newFilePath string) (*SsTabl
 		}
 
 		if currNode == nil && currFile != nil {
-			currNode := new(LsmNode)
+			currNode = new(LsmNode)
 			err = currNode.ReadFrom(currFile)
 			if err != nil {
 				if err != io.EOF {
