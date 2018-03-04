@@ -22,7 +22,8 @@ var (
 )
 
 const (
-	logFileName = "lsm.log"
+	logFileName        = "lsm.log"
+	maxMemoryNodeCount = 1024
 )
 
 type Lsm struct {
@@ -39,7 +40,7 @@ type Lsm struct {
 }
 
 func (lsm *Lsm) shouldCompact() bool {
-	if !lsm.closing && len(lsm.nodeMap) > 4 {
+	if !lsm.closing && len(lsm.nodeMap) > maxMemoryNodeCount {
 		return true
 	}
 	return false
@@ -398,7 +399,7 @@ func OpenLsm(rootPath string) (*Lsm, error) {
 	}
 	lsm.logFile = logFile
 	lsm.mergeTimerStop = make(chan bool)
-	lsm.mergeTimer = time.NewTicker(50000 * time.Second)
+	lsm.mergeTimer = time.NewTicker(100 * time.Millisecond)
 	lsm.wg.Add(1)
 	go lsm.Background()
 	return lsm, nil

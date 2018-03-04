@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	keysPerIndex = 128
+	keysPerIndex = 256
 )
 
 type SsTable struct {

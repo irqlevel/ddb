@@ -63,7 +63,7 @@ func TestLsmCreateOpen(t *testing.T) {
 	}
 
 	kv := make(map[string]string)
-	for i := 0; i < 10000; i++ {
+	for i := 0; i < 100000; i++ {
 		kv[random.GenerateRandomHexString(16)] = random.GenerateRandomHexString(64)
 	}
 
