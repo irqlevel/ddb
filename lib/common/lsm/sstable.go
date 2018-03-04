@@ -8,10 +8,75 @@ import (
 	"sync"
 )
 
+const (
+	keysPerIndex = 128
+)
+
 type SsTable struct {
 	filePath string
 	file     *os.File
 	lock     sync.RWMutex
+
+	keyToOffset map[string]int64
+	keys        []string
+
+	minKey *string
+	maxKey *string
+}
+
+func (st *SsTable) index() error {
+	file, err := os.OpenFile(st.filePath, os.O_RDONLY, 0600)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	st.minKey = nil
+	st.maxKey = nil
+
+	i := int64(0)
+
+	st.keys = make([]string, 0)
+	st.keyToOffset = make(map[string]int64)
+
+	for {
+		node := new(LsmNode)
+		offset, err := file.Seek(0, os.SEEK_CUR)
+		if err != nil {
+			return err
+		}
+
+		err = node.ReadFrom(file)
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return err
+		}
+		if node.deleted {
+			panic("node already deleted")
+		}
+		if st.minKey == nil {
+			st.minKey = &node.key
+		} else if node.key < *st.minKey {
+			st.minKey = &node.key
+		}
+
+		if st.maxKey == nil {
+			st.maxKey = &node.key
+		} else if node.key > *st.maxKey {
+			st.maxKey = &node.key
+		}
+
+		if i%keysPerIndex == 0 {
+			st.keys = append(st.keys, node.key)
+			st.keyToOffset[node.key] = offset
+		}
+		i++
+	}
+
+	sort.Strings(st.keys)
+	return nil
 }
 
 func newSsTable(filePath string, nodeMap map[string]*LsmNode) (*SsTable, error) {
@@ -25,7 +90,10 @@ func newSsTable(filePath string, nodeMap map[string]*LsmNode) (*SsTable, error) 
 
 	keys := make([]string, len(nodeMap))
 	i := 0
-	for key := range nodeMap {
+	for key, node := range nodeMap {
+		if node.deleted {
+			continue
+		}
 		keys[i] = key
 		i++
 	}
@@ -47,6 +115,13 @@ func newSsTable(filePath string, nodeMap map[string]*LsmNode) (*SsTable, error) 
 		os.Remove(st.filePath)
 		return nil, err
 	}
+
+	err = st.index()
+	if err != nil {
+		file.Close()
+		os.Remove(st.filePath)
+		return nil, err
+	}
 	st.file = file
 	return st, nil
 }
@@ -60,6 +135,11 @@ func openSsTable(filePath string) (*SsTable, error) {
 		return nil, err
 	}
 	st.file = file
+	err = st.index()
+	if err != nil {
+		st.file.Close()
+		return nil, err
+	}
 	return st, nil
 }
 
@@ -67,13 +147,33 @@ func (st *SsTable) Get(key string) (string, error) {
 	st.lock.RLock()
 	defer st.lock.RUnlock()
 
+	if st.minKey != nil && key < *st.minKey {
+		return "", ErrNotFound
+	}
+
+	if st.maxKey != nil && key > *st.maxKey {
+		return "", ErrNotFound
+	}
+
 	file, err := os.OpenFile(st.filePath, os.O_RDONLY, 0600)
 	if err != nil {
 		return "", err
 	}
 	defer file.Close()
 
+	keyIndex := sort.SearchStrings(st.keys, key)
+	if keyIndex > 0 {
+		keyIndex--
+	}
+
+	offset := st.keyToOffset[st.keys[keyIndex]]
+	_, err = file.Seek(offset, os.SEEK_SET)
+	if err != nil {
+		return "", err
+	}
+
 	for {
+
 		node := newLsmNode("", "")
 		err = node.ReadFrom(file)
 		if err != nil {
@@ -205,6 +305,12 @@ func mergeSsTable(prevSt *SsTable, currSt *SsTable, newFilePath string) (*SsTabl
 			}
 		}
 
+		if newNode.deleted {
+			if newNode.deleted {
+				panic("node already deleted")
+			}
+		}
+
 		err = newNode.WriteTo(newFile)
 		if err != nil {
 			return nil, err
@@ -219,5 +325,9 @@ func mergeSsTable(prevSt *SsTable, currSt *SsTable, newFilePath string) (*SsTabl
 	newSt := new(SsTable)
 	newSt.filePath = newFilePath
 	newSt.file = newFile
+	err = newSt.index()
+	if err != nil {
+		return nil, err
+	}
 	return newSt, nil
 }

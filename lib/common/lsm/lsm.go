@@ -16,6 +16,8 @@ import (
 
 var (
 	ErrNotFound            = fmt.Errorf("Not found")
+	ErrEmptyKey            = fmt.Errorf("Empty key")
+	ErrEmptyValue          = fmt.Errorf("Empty value")
 	ssTableFileNamePattern = regexp.MustCompile(`^lsm\_([0-9]+)\.sstable$`)
 )
 
@@ -136,6 +138,13 @@ func (lsm *Lsm) logDelete(key string) error {
 }
 
 func (lsm *Lsm) Set(key string, value string) error {
+	if key == "" {
+		return ErrEmptyKey
+	}
+	if value == "" {
+		return ErrEmptyValue
+	}
+
 	lsm.lock.Lock()
 	defer lsm.lock.Unlock()
 
@@ -185,6 +194,10 @@ func (lsm *Lsm) lookupSsTables(key string) (string, error) {
 }
 
 func (lsm *Lsm) Get(key string) (string, error) {
+	if key == "" {
+		return "", ErrEmptyKey
+	}
+
 	lsm.lock.RLock()
 	defer lsm.lock.RUnlock()
 	node, ok := lsm.nodeMap[key]
@@ -199,6 +212,10 @@ func (lsm *Lsm) Get(key string) (string, error) {
 }
 
 func (lsm *Lsm) Delete(key string) error {
+	if key == "" {
+		return ErrEmptyKey
+	}
+
 	lsm.lock.Lock()
 	defer lsm.lock.Unlock()
 
