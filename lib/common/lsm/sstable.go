@@ -8,6 +8,10 @@ import (
 	"sync"
 )
 
+var (
+	ErrDeleted = fmt.Errorf("Deleted")
+)
+
 const (
 	keysPerIndex = 256
 )
@@ -53,9 +57,7 @@ func (st *SsTable) index() error {
 			}
 			return err
 		}
-		if node.deleted {
-			panic("node already deleted")
-		}
+
 		if st.minKey == nil {
 			st.minKey = &node.key
 		} else if node.key < *st.minKey {
@@ -90,10 +92,7 @@ func newSsTable(filePath string, nodeMap map[string]*LsmNode) (*SsTable, error) 
 
 	keys := make([]string, len(nodeMap))
 	i := 0
-	for key, node := range nodeMap {
-		if node.deleted {
-			continue
-		}
+	for key := range nodeMap {
 		keys[i] = key
 		i++
 	}
@@ -161,15 +160,22 @@ func (st *SsTable) Get(key string) (string, error) {
 	}
 	defer file.Close()
 
-	keyIndex := sort.SearchStrings(st.keys, key)
-	if keyIndex > 0 {
-		keyIndex--
-	}
+	offset := int64(0)
+	if len(st.keys) > 0 {
+		keyIndex := sort.SearchStrings(st.keys, key)
+		if keyIndex > 0 {
+			keyIndex--
+		}
 
-	offset := st.keyToOffset[st.keys[keyIndex]]
-	_, err = file.Seek(offset, os.SEEK_SET)
-	if err != nil {
-		return "", err
+		if keyIndex >= len(st.keys) || keyIndex < 0 {
+			fmt.Printf("keyIndex %d\n", keyIndex)
+		}
+
+		offset = st.keyToOffset[st.keys[keyIndex]]
+		_, err = file.Seek(offset, os.SEEK_SET)
+		if err != nil {
+			return "", err
+		}
 	}
 
 	for {
@@ -184,7 +190,7 @@ func (st *SsTable) Get(key string) (string, error) {
 		}
 		if node.key == key {
 			if node.deleted {
-				return "", ErrNotFound
+				return "", ErrDeleted
 			}
 
 			return node.value, nil
@@ -302,12 +308,6 @@ func mergeSsTable(prevSt *SsTable, currSt *SsTable, newFilePath string) (*SsTabl
 			} else {
 				newNode = currNode
 				currNode = nil
-			}
-		}
-
-		if newNode.deleted {
-			if newNode.deleted {
-				panic("node already deleted")
 			}
 		}
 

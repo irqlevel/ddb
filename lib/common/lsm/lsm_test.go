@@ -84,12 +84,41 @@ func TestLsmCreateOpen(t *testing.T) {
 	}
 	defer lsm.Close()
 
+	keysToDelete := make(map[string]bool)
+	i := 0
+	for key := range kv {
+		keysToDelete[key] = true
+		i++
+		if i > len(kv)/3 {
+			break
+		}
+	}
+
+	for key := range keysToDelete {
+		err = lsm.Delete(key)
+		if err != nil {
+			t.Fatalf("Can't del lsm key %s error %v", key, err)
+			return
+		}
+	}
+
 	for key, value := range kv {
 		evalue, err := lsm.Get(key)
 		if err != nil {
+			_, ok := keysToDelete[key]
+			if ok && err == ErrNotFound {
+				continue
+			}
 			t.Fatalf("Can't get lsm key %s error %v", key, err)
 			return
 		}
+
+		_, ok := keysToDelete[key]
+		if ok {
+			t.Fatalf("Key %s already deleted", key)
+			return
+		}
+
 		if evalue != value {
 			t.Fatalf("Inconsistent value")
 			return
