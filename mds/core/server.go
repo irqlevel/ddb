@@ -17,13 +17,22 @@ import (
 	client "ddb/client/core"
 	filelog "ddb/lib/common/filelog"
 	log "ddb/lib/common/log"
+	"ddb/lib/common/lsm"
 )
+
+type KeyValueStorage interface {
+	Get(key string) (string, error)
+	Set(key string, value string) error
+	Delete(key string) error
+	Close()
+}
 
 type MdsParameters struct {
 	ApiAddress   string
 	DebugAddress string
 	LogFile      string
 	PidFile      string
+	StoragePath  string
 }
 
 type Mds struct {
@@ -58,7 +67,7 @@ func errorToHttpStatus(err error) int {
 	switch err {
 	case ErrBadRequest:
 		return http.StatusBadRequest
-	case ErrNotFound:
+	case ErrNotFound, lsm.ErrNotFound:
 		return http.StatusNotFound
 	case ErrAlreadyExists:
 		return http.StatusConflict
@@ -207,6 +216,7 @@ func (mds *Mds) shutdown() {
 	mds.log.Pf(0, "shutdowning")
 	mds.apiServer.Shutdown(context.Background())
 	mds.debugServer.Shutdown(context.Background())
+	mds.kvs.Close()
 	mds.log.Pf(0, "shutdown")
 	mds.log.Shutdown()
 }
@@ -246,23 +256,35 @@ func (mds *Mds) eventLoop() error {
 }
 
 func (mds *Mds) Run(params *MdsParameters) error {
-	mds.kvs = NewLocalKvs()
-
 	filelog, err := filelog.NewFileLog(params.LogFile)
 	if err != nil {
 		return err
 	}
+
 	mds.log = log.NewLog(filelog)
+	kvs, err := lsm.OpenLsm(mds.log, params.StoragePath)
+	if err != nil {
+		kvs, err = lsm.NewLsm(mds.log, params.StoragePath)
+		if err != nil {
+			mds.log.Shutdown()
+			return err
+		}
+	}
+	mds.kvs = kvs
 
 	if params.PidFile != "" {
 		f, err := os.OpenFile(params.PidFile, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0666)
 		if err != nil {
+			mds.kvs.Close()
+			mds.log.Shutdown()
 			return err
 		}
 		defer f.Close()
 
 		_, err = f.WriteString(strconv.Itoa(os.Getpid()))
 		if err != nil {
+			mds.kvs.Close()
+			mds.log.Shutdown()
 			return err
 		}
 	}

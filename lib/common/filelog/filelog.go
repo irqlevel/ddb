@@ -22,7 +22,9 @@ func (lb *FileLog) Shutdown() {
 	lb.lock.Lock()
 	defer lb.lock.Unlock()
 
-	lb.file.Close()
+	if lb.filepath != "" {
+		lb.file.Close()
+	}
 	lb.file = nil
 }
 
@@ -62,4 +64,11 @@ func NewFileLog(filepath string) (logbackend.LogBackend, error) {
 
 	lb.file = file
 	return lb, nil
+}
+
+func NewFileLogWithFile(file *os.File) logbackend.LogBackend {
+	lb := new(FileLog)
+	lb.filepath = ""
+	lb.file = file
+	return lb
 }

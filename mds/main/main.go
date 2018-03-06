@@ -13,6 +13,7 @@ func main() {
 	flag.StringVar(&params.DebugAddress, "debugAddress", "127.0.0.1:8001", "debug address")
 	flag.StringVar(&params.LogFile, "logFile", "mds.log", "log file path")
 	flag.StringVar(&params.PidFile, "pidFile", "mds.pid", "pid file")
+	flag.StringVar(&params.StoragePath, "storagePath", ".", "storage path")
 
 	flag.Parse()
 

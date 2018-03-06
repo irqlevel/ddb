@@ -1,6 +1,7 @@
 package lsm
 
 import (
+	log "ddb/lib/common/log"
 	"fmt"
 	"io"
 	"os"
@@ -26,6 +27,7 @@ type SsTable struct {
 
 	minKey *string
 	maxKey *string
+	log    log.LogInterface
 }
 
 func (st *SsTable) index() error {
@@ -81,12 +83,13 @@ func (st *SsTable) index() error {
 	return nil
 }
 
-func newSsTable(filePath string, nodeMap map[string]*LsmNode) (*SsTable, error) {
+func newSsTable(log log.LogInterface, filePath string, nodeMap map[string]*LsmNode) (*SsTable, error) {
 	st := new(SsTable)
 	st.filePath = filePath
+	st.log = log
 	file, err := os.OpenFile(st.filePath, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
-		fmt.Printf("Create table %s error %v\n", st.filePath, err)
+		log.Pf(0, "Create table %s error %v", st.filePath, err)
 		return nil, err
 	}
 
@@ -125,12 +128,13 @@ func newSsTable(filePath string, nodeMap map[string]*LsmNode) (*SsTable, error) 
 	return st, nil
 }
 
-func openSsTable(filePath string) (*SsTable, error) {
+func openSsTable(log log.LogInterface, filePath string) (*SsTable, error) {
 	st := new(SsTable)
 	st.filePath = filePath
+	st.log = log
 	file, err := os.OpenFile(st.filePath, os.O_RDWR, 0600)
 	if err != nil {
-		fmt.Printf("Open table %s error %v\n", st.filePath, err)
+		log.Pf(0, "Open table %s error %v", st.filePath, err)
 		return nil, err
 	}
 	st.file = file
@@ -167,10 +171,6 @@ func (st *SsTable) Get(key string) (string, error) {
 			keyIndex--
 		}
 
-		if keyIndex >= len(st.keys) || keyIndex < 0 {
-			fmt.Printf("keyIndex %d\n", keyIndex)
-		}
-
 		offset = st.keyToOffset[st.keys[keyIndex]]
 		_, err = file.Seek(offset, os.SEEK_SET)
 		if err != nil {
@@ -204,7 +204,7 @@ func (st *SsTable) Close() {
 	st.lock.Lock()
 	defer st.lock.Unlock()
 	st.file.Close()
-	fmt.Printf("Close %s\n", st.filePath)
+	st.log.Pf(0, "Close %s", st.filePath)
 	st.file = nil
 	st.filePath = ""
 }
@@ -213,13 +213,13 @@ func (st *SsTable) Erase() {
 	st.lock.Lock()
 	defer st.lock.Unlock()
 	st.file.Close()
-	fmt.Printf("Erase %s\n", st.filePath)
+	st.log.Pf(0, "Erase %s", st.filePath)
 	os.Remove(st.filePath)
 	st.file = nil
 	st.filePath = ""
 }
 
-func mergeSsTable(prevSt *SsTable, currSt *SsTable, newFilePath string) (*SsTable, error) {
+func mergeSsTable(log log.LogInterface, prevSt *SsTable, currSt *SsTable, newFilePath string) (*SsTable, error) {
 	prevSt.lock.RLock()
 	defer prevSt.lock.RUnlock()
 	currSt.lock.RLock()
@@ -323,6 +323,7 @@ func mergeSsTable(prevSt *SsTable, currSt *SsTable, newFilePath string) (*SsTabl
 	}
 
 	newSt := new(SsTable)
+	newSt.log = log
 	newSt.filePath = newFilePath
 	newSt.file = newFile
 	err = newSt.index()

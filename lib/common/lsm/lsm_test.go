@@ -1,6 +1,8 @@
 package lsm
 
 import (
+	"ddb/lib/common/filelog"
+	"ddb/lib/common/log"
 	"ddb/lib/common/random"
 	"io/ioutil"
 	"os"
@@ -56,7 +58,10 @@ func TestLsmCreateOpen(t *testing.T) {
 	}
 	//defer os.RemoveAll(rootPath)
 
-	lsm, err := NewLsm(rootPath)
+	log := log.NewLog(filelog.NewFileLogWithFile(os.Stdout))
+	defer log.Sync()
+
+	lsm, err := NewLsm(log, rootPath)
 	if err != nil {
 		t.Fatalf("Can't create lsm error %v", err)
 		return
@@ -67,6 +72,7 @@ func TestLsmCreateOpen(t *testing.T) {
 		kv[random.GenerateRandomHexString(16)] = random.GenerateRandomHexString(64)
 	}
 
+	i := 0
 	for key, value := range kv {
 		err = lsm.Set(key, value)
 		if err != nil {
@@ -74,10 +80,14 @@ func TestLsmCreateOpen(t *testing.T) {
 			lsm.Close()
 			return
 		}
+		if i%1000 == 0 {
+			log.Pf(0, "Set key %d", i)
+		}
+		i++
 	}
 	lsm.Close()
 
-	lsm, err = OpenLsm(rootPath)
+	lsm, err = OpenLsm(log, rootPath)
 	if err != nil {
 		t.Fatalf("Can't open lsm error %v", err)
 		return
@@ -85,7 +95,7 @@ func TestLsmCreateOpen(t *testing.T) {
 	defer lsm.Close()
 
 	keysToDelete := make(map[string]bool)
-	i := 0
+	i = 0
 	for key := range kv {
 		keysToDelete[key] = true
 		i++
@@ -94,24 +104,37 @@ func TestLsmCreateOpen(t *testing.T) {
 		}
 	}
 
+	i = 0
 	for key := range keysToDelete {
 		err = lsm.Delete(key)
 		if err != nil {
 			t.Fatalf("Can't del lsm key %s error %v", key, err)
 			return
 		}
+		if i%1000 == 0 {
+			log.Pf(0, "Del key %d", i)
+		}
+		i++
 	}
 
+	i = 0
 	for key, value := range kv {
 		evalue, err := lsm.Get(key)
 		if err != nil {
-			_, ok := keysToDelete[key]
-			if ok && err == ErrNotFound {
-				continue
+			if err == ErrNotFound {
+				_, ok := keysToDelete[key]
+				if ok {
+					continue
+				}
 			}
 			t.Fatalf("Can't get lsm key %s error %v", key, err)
 			return
 		}
+
+		if i%1000 == 0 {
+			log.Pf(0, "Get key %d", i)
+		}
+		i++
 
 		_, ok := keysToDelete[key]
 		if ok {

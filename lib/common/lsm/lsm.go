@@ -1,6 +1,7 @@
 package lsm
 
 import (
+	log "ddb/lib/common/log"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -43,6 +44,7 @@ type Lsm struct {
 	stopChan       chan bool
 	closing        bool
 	wg             sync.WaitGroup
+	log            log.LogInterface
 }
 
 func (lsm *Lsm) shouldCompact(force bool) bool {
@@ -68,8 +70,8 @@ func (lsm *Lsm) compact(force bool, logTruncate bool) error {
 	}
 
 	time := atomic.AddInt64(&lsm.time, 1)
-	fmt.Printf("Compacting %d size %d\n", time, len(lsm.nodeMap))
-	st, err := newSsTable(lsm.getSsTablePath(time), lsm.nodeMap)
+	lsm.log.Pf(0, "Compacting %d size %d", time, len(lsm.nodeMap))
+	st, err := newSsTable(lsm.log, lsm.getSsTablePath(time), lsm.nodeMap)
 	if err != nil {
 		return err
 	}
@@ -96,7 +98,7 @@ func (lsm *Lsm) mergeSsTables() error {
 
 	time := atomic.AddInt64(&lsm.time, 1)
 
-	fmt.Printf("Merge %d\n", time)
+	lsm.log.Pf(0, "Merge %d", time)
 
 	ids := make([]int64, len(lsm.ssTableMap))
 	i := 0
@@ -114,7 +116,7 @@ func (lsm *Lsm) mergeSsTables() error {
 	currSt := lsm.ssTableMap[currStId]
 	lsm.ssTableMapLock.RUnlock()
 
-	st, err := mergeSsTable(prevSt, currSt, lsm.getSsTablePath(time))
+	st, err := mergeSsTable(lsm.log, prevSt, currSt, lsm.getSsTablePath(time))
 	if err != nil {
 		return err
 	}
@@ -266,7 +268,7 @@ func (lsm *Lsm) Delete(key string) error {
 }
 
 func (lsm *Lsm) Close() {
-	fmt.Printf("Close\n")
+	lsm.log.Pf(0, "Close")
 
 	lsm.nodeMapLock.Lock()
 	lsm.closing = true
@@ -305,7 +307,7 @@ func (lsm *Lsm) Background() {
 	}
 }
 
-func newLsm(rootPath string, logFile *os.File) *Lsm {
+func newLsm(log log.LogInterface, rootPath string, logFile *os.File) *Lsm {
 	lsm := new(Lsm)
 	lsm.nodeMap = make(map[string]*LsmNode)
 	lsm.ssTableMap = make(map[int64]*SsTable)
@@ -315,6 +317,7 @@ func newLsm(rootPath string, logFile *os.File) *Lsm {
 	lsm.compactChan = make(chan bool, 1)
 	lsm.mergeTimer = time.NewTicker(mergeTimeoutMs * time.Millisecond)
 	lsm.compactTimer = time.NewTicker(compactTimeoutMs * time.Millisecond)
+	lsm.log = log
 	return lsm
 }
 
@@ -323,8 +326,8 @@ func (lsm *Lsm) start() {
 	go lsm.Background()
 }
 
-func NewLsm(rootPath string) (*Lsm, error) {
-	fmt.Printf("New\n")
+func NewLsm(log log.LogInterface, rootPath string) (*Lsm, error) {
+	log.Pf(0, "New")
 	rootPath, err := filepath.Abs(rootPath)
 	if err != nil {
 		return nil, err
@@ -340,7 +343,7 @@ func NewLsm(rootPath string) (*Lsm, error) {
 		return nil, err
 	}
 
-	lsm := newLsm(rootPath, logFile)
+	lsm := newLsm(log, rootPath, logFile)
 	lsm.start()
 	return lsm, nil
 }
@@ -376,7 +379,7 @@ func (lsm *Lsm) openSsTables() error {
 			continue
 		}
 
-		st, err := openSsTable(lsm.getSsTablePath(index))
+		st, err := openSsTable(lsm.log, lsm.getSsTablePath(index))
 		if err != nil {
 			if os.IsNotExist(err) {
 				return nil
@@ -409,25 +412,25 @@ func (lsm *Lsm) restoreFromLog(logFile *os.File) error {
 	return lsm.compact(true, false)
 }
 
-func OpenLsm(rootPath string) (*Lsm, error) {
-	fmt.Printf("Open\n")
+func OpenLsm(log log.LogInterface, rootPath string) (*Lsm, error) {
+	log.Pf(0, "Open")
 	logFile, err := os.OpenFile(filepath.Join(rootPath, logFileName), os.O_RDONLY, 0600)
 	if err != nil {
-		fmt.Printf("open log error %v\n", err)
+		log.Pf(0, "open log error %v", err)
 		return nil, err
 	}
 
-	lsm := newLsm(rootPath, logFile)
+	lsm := newLsm(log, rootPath, logFile)
 
 	err = lsm.openSsTables()
 	if err != nil {
-		fmt.Printf("open tables error %v\n", err)
+		log.Pf(0, "open tables error %v", err)
 		return nil, err
 	}
 
 	err = lsm.restoreFromLog(logFile)
 	if err != nil {
-		fmt.Printf("restore error %v\n", err)
+		log.Pf(0, "restore error %v", err)
 		lsm.closeSsTables()
 		logFile.Close()
 		return nil, err
@@ -436,7 +439,7 @@ func OpenLsm(rootPath string) (*Lsm, error) {
 
 	logFile, err = os.OpenFile(filepath.Join(rootPath, logFileName), os.O_APPEND|os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
-		fmt.Printf("open log error %v\n", err)
+		log.Pf(0, "open log error %v", err)
 		lsm.closeSsTables()
 		return nil, err
 	}
