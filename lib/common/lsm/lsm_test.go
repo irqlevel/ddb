@@ -13,7 +13,7 @@ func TestLsmNodeReadWrite(t *testing.T) {
 
 	f, err := ioutil.TempFile("", "TestLsmNodeReadWrite_"+random.GenerateRandomHexString(5))
 	if err != nil {
-		t.Fatalf("Can't create temporary file")
+		t.Fatalf("can't create temporary file")
 		return
 	}
 	defer os.Remove(f.Name())
@@ -22,30 +22,30 @@ func TestLsmNodeReadWrite(t *testing.T) {
 	n := newLsmNode(random.GenerateRandomHexString(64), random.GenerateRandomHexString(128))
 	err = n.WriteTo(f)
 	if err != nil {
-		t.Fatalf("Can't write node error %v", err)
+		t.Fatalf("can't write node error %v", err)
 		return
 	}
 
 	_, err = f.Seek(0, os.SEEK_SET)
 	if err != nil {
-		t.Fatalf("Can't seek to begining of file error %v", err)
+		t.Fatalf("can't seek to begining of file error %v", err)
 		return
 	}
 
 	rn := newLsmNode("", "")
 	err = rn.ReadFrom(f)
 	if err != nil {
-		t.Fatalf("Can't read node error %v", err)
+		t.Fatalf("can't read node error %v", err)
 		return
 	}
 
 	if n.key != rn.key {
-		t.Fatalf("Inconsistent key")
+		t.Fatalf("inconsistent key")
 		return
 	}
 
 	if n.value != rn.value {
-		t.Fatalf("Inconsistent value")
+		t.Fatalf("inconsistent value")
 		return
 	}
 }
@@ -53,17 +53,17 @@ func TestLsmNodeReadWrite(t *testing.T) {
 func TestLsmCreateOpen(t *testing.T) {
 	rootPath, err := ioutil.TempDir("", "TestLsmCreateOpen_"+random.GenerateRandomHexString(5))
 	if err != nil {
-		t.Fatalf("Can't create tmp dir error %v", err)
+		t.Fatalf("can't create tmp dir error %v", err)
 		return
 	}
-	//defer os.RemoveAll(rootPath)
+	defer os.RemoveAll(rootPath)
 
 	log := log.NewLog(filelog.NewFileLogWithFile(os.Stdout))
 	defer log.Sync()
 
 	lsm, err := NewLsm(log, rootPath)
 	if err != nil {
-		t.Fatalf("Can't create lsm error %v", err)
+		t.Fatalf("can't create lsm error %v", err)
 		return
 	}
 
@@ -76,12 +76,12 @@ func TestLsmCreateOpen(t *testing.T) {
 	for key, value := range kv {
 		err = lsm.Set(key, value)
 		if err != nil {
-			t.Fatalf("Can't set lsm key error %v", err)
+			t.Fatalf("can't set lsm key error %v", err)
 			lsm.Close()
 			return
 		}
 		if i%1000 == 0 {
-			log.Pf(0, "Set key %d", i)
+			log.Pf(0, "set key %d", i)
 		}
 		i++
 	}
@@ -89,7 +89,7 @@ func TestLsmCreateOpen(t *testing.T) {
 
 	lsm, err = OpenLsm(log, rootPath)
 	if err != nil {
-		t.Fatalf("Can't open lsm error %v", err)
+		t.Fatalf("can't open lsm error %v", err)
 		return
 	}
 	defer lsm.Close()
@@ -108,17 +108,22 @@ func TestLsmCreateOpen(t *testing.T) {
 	for key := range keysToDelete {
 		err = lsm.Delete(key)
 		if err != nil {
-			t.Fatalf("Can't del lsm key %s error %v", key, err)
+			t.Fatalf("can't del lsm key %s error %v", key, err)
 			return
 		}
 		if i%1000 == 0 {
-			log.Pf(0, "Del key %d", i)
+			log.Pf(0, "del key %d", i)
 		}
 		i++
 	}
 
 	i = 0
 	for key, value := range kv {
+		_, ok := keysToDelete[key]
+		if ok {
+			continue
+		}
+
 		evalue, err := lsm.Get(key)
 		if err != nil {
 			if err == ErrNotFound {
@@ -127,23 +132,23 @@ func TestLsmCreateOpen(t *testing.T) {
 					continue
 				}
 			}
-			t.Fatalf("Can't get lsm key %s error %v", key, err)
+			t.Fatalf("can't get lsm key %s error %v", key, err)
 			return
 		}
 
 		if i%1000 == 0 {
-			log.Pf(0, "Get key %d", i)
+			log.Pf(0, "get key %d", i)
 		}
 		i++
 
-		_, ok := keysToDelete[key]
+		_, ok = keysToDelete[key]
 		if ok {
-			t.Fatalf("Key %s already deleted", key)
+			t.Fatalf("key %s already deleted", key)
 			return
 		}
 
 		if evalue != value {
-			t.Fatalf("Inconsistent value")
+			t.Fatalf("inconsistent value")
 			return
 		}
 	}

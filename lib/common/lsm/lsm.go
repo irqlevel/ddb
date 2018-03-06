@@ -26,7 +26,7 @@ var (
 const (
 	logFileName        = "lsm.log"
 	maxMemoryNodeCount = 1000
-	mergeTimeoutMs     = 1000
+	mergeTimeoutMs     = 100
 	compactTimeoutMs   = 100
 )
 
@@ -70,7 +70,7 @@ func (lsm *Lsm) compact(force bool, logTruncate bool) error {
 	}
 
 	time := atomic.AddInt64(&lsm.time, 1)
-	lsm.log.Pf(0, "Compacting %d size %d", time, len(lsm.nodeMap))
+	lsm.log.Pf(0, "compacting %d size %d", time, len(lsm.nodeMap))
 	st, err := newSsTable(lsm.log, lsm.getSsTablePath(time), lsm.nodeMap)
 	if err != nil {
 		return err
@@ -91,14 +91,10 @@ func (lsm *Lsm) compact(force bool, logTruncate bool) error {
 
 func (lsm *Lsm) mergeSsTables() error {
 	lsm.ssTableMapLock.RLock()
-	if len(lsm.ssTableMap) <= 1 {
+	if len(lsm.ssTableMap) <= 8 {
 		lsm.ssTableMapLock.RUnlock()
 		return nil
 	}
-
-	time := atomic.AddInt64(&lsm.time, 1)
-
-	lsm.log.Pf(0, "Merge %d", time)
 
 	ids := make([]int64, len(lsm.ssTableMap))
 	i := 0
@@ -107,29 +103,52 @@ func (lsm *Lsm) mergeSsTables() error {
 		i++
 	}
 
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
-
-	prevStId := ids[len(ids)-2]
-	currStId := ids[len(ids)-1]
-
-	prevSt := lsm.ssTableMap[prevStId]
-	currSt := lsm.ssTableMap[currStId]
 	lsm.ssTableMapLock.RUnlock()
 
-	st, err := mergeSsTable(lsm.log, prevSt, currSt, lsm.getSsTablePath(time))
-	if err != nil {
-		return err
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+
+	for i := 0; i < len(ids); i += 2 {
+		j := i + 1
+		if j >= len(ids) {
+			return nil
+		}
+
+		prevStId := ids[i]
+		currStId := ids[j]
+
+		lsm.ssTableMapLock.RLock()
+		prevSt := lsm.ssTableMap[prevStId]
+		currSt := lsm.ssTableMap[currStId]
+		lsm.ssTableMapLock.RUnlock()
+
+		if prevSt == nil || currSt == nil {
+			return nil
+		}
+
+		lsm.log.Pf(0, "merge %d %d -> %d", prevStId, currStId, currStId)
+
+		tmpFilePath := lsm.getSsTablePath(atomic.AddInt64(&lsm.time, 1))
+		err := currSt.Merge(prevSt, tmpFilePath)
+		if err != nil {
+			return err
+		}
+
+		newSt, err := openSsTable(lsm.log, tmpFilePath)
+		if err != nil {
+			os.Remove(tmpFilePath)
+			return err
+		}
+
+		lsm.ssTableMapLock.Lock()
+		lsm.ssTableMap[currStId] = newSt
+		delete(lsm.ssTableMap, prevStId)
+		lsm.ssTableMapLock.Unlock()
+
+		currSt.Erase()
+		prevSt.Erase()
+
+		lsm.log.Pf(0, "merge %d %d -> %d done", prevStId, currStId, currStId)
 	}
-
-	lsm.ssTableMapLock.Lock()
-	lsm.ssTableMap[time] = st
-	delete(lsm.ssTableMap, prevStId)
-	delete(lsm.ssTableMap, currStId)
-	lsm.ssTableMapLock.Unlock()
-
-	prevSt.Erase()
-	currSt.Erase()
-
 	return nil
 }
 
@@ -268,7 +287,7 @@ func (lsm *Lsm) Delete(key string) error {
 }
 
 func (lsm *Lsm) Close() {
-	lsm.log.Pf(0, "Close")
+	lsm.log.Pf(0, "close")
 
 	lsm.nodeMapLock.Lock()
 	lsm.closing = true
@@ -294,10 +313,10 @@ func (lsm *Lsm) Background() {
 	for {
 		select {
 		case <-lsm.mergeTimer.C:
-			lsm.mergeSsTables()
+			//lsm.mergeSsTables()
 		case <-lsm.compactTimer.C:
-			lsm.compact(false, true)
-			lsm.mergeSsTables()
+			//lsm.compact(false, true)
+			//lsm.mergeSsTables()
 		case <-lsm.compactChan:
 			lsm.compact(false, true)
 			lsm.mergeSsTables()
@@ -327,7 +346,7 @@ func (lsm *Lsm) start() {
 }
 
 func NewLsm(log log.LogInterface, rootPath string) (*Lsm, error) {
-	log.Pf(0, "New")
+	log.Pf(0, "new")
 	rootPath, err := filepath.Abs(rootPath)
 	if err != nil {
 		return nil, err
@@ -413,7 +432,7 @@ func (lsm *Lsm) restoreFromLog(logFile *os.File) error {
 }
 
 func OpenLsm(log log.LogInterface, rootPath string) (*Lsm, error) {
-	log.Pf(0, "Open")
+	log.Pf(0, "open")
 	logFile, err := os.OpenFile(filepath.Join(rootPath, logFileName), os.O_RDONLY, 0600)
 	if err != nil {
 		log.Pf(0, "open log error %v", err)

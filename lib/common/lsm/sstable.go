@@ -14,7 +14,7 @@ var (
 )
 
 const (
-	keysPerIndex = 256
+	keysPerIndex = 512
 )
 
 type SsTable struct {
@@ -164,6 +164,8 @@ func (st *SsTable) Get(key string) (string, error) {
 	}
 	defer file.Close()
 
+	//st.log.Pf(0, "%s keys %d", st.filePath, len(st.keys))
+
 	offset := int64(0)
 	if len(st.keys) > 0 {
 		keyIndex := sort.SearchStrings(st.keys, key)
@@ -179,8 +181,13 @@ func (st *SsTable) Get(key string) (string, error) {
 	}
 
 	for {
+		offset, err = file.Seek(0, os.SEEK_CUR)
+		if err != nil {
+			return "", err
+		}
 
-		node := newLsmNode("", "")
+		//st.log.Pf(0, "lookup %s at %d for key %s", st.filePath, offset, key)
+		node := new(LsmNode)
 		err = node.ReadFrom(file)
 		if err != nil {
 			if err == io.EOF {
@@ -195,6 +202,9 @@ func (st *SsTable) Get(key string) (string, error) {
 
 			return node.value, nil
 		}
+		if node.key > key {
+			break
+		}
 	}
 
 	return "", ErrNotFound
@@ -204,7 +214,7 @@ func (st *SsTable) Close() {
 	st.lock.Lock()
 	defer st.lock.Unlock()
 	st.file.Close()
-	st.log.Pf(0, "Close %s", st.filePath)
+	st.log.Pf(0, "close %s", st.filePath)
 	st.file = nil
 	st.filePath = ""
 }
@@ -213,19 +223,20 @@ func (st *SsTable) Erase() {
 	st.lock.Lock()
 	defer st.lock.Unlock()
 	st.file.Close()
-	st.log.Pf(0, "Erase %s", st.filePath)
+	st.log.Pf(0, "erase %s", st.filePath)
 	os.Remove(st.filePath)
 	st.file = nil
 	st.filePath = ""
 }
 
-func mergeSsTable(log log.LogInterface, prevSt *SsTable, currSt *SsTable, newFilePath string) (*SsTable, error) {
+func (currSt *SsTable) Merge(prevSt *SsTable, tmpFilePath string) error {
 	prevSt.lock.RLock()
 	defer prevSt.lock.RUnlock()
+
 	currSt.lock.RLock()
 	defer currSt.lock.RUnlock()
 
-	var prevFile, currFile, newFile *os.File
+	var prevFile, currFile, tmpFile *os.File
 	var err error
 
 	defer func() {
@@ -235,27 +246,32 @@ func mergeSsTable(log log.LogInterface, prevSt *SsTable, currSt *SsTable, newFil
 		if currFile != nil {
 			currFile.Close()
 		}
+
 		if err != nil {
-			if newFile != nil {
-				newFile.Close()
+			if tmpFile != nil {
+				tmpFile.Close()
+				os.Remove(tmpFilePath)
 			}
-			os.Remove(newFilePath)
+		} else {
+			if tmpFile != nil {
+				tmpFile.Close()
+			}
 		}
 	}()
 
 	prevFile, err = os.OpenFile(prevSt.filePath, os.O_RDONLY, 0600)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	currFile, err = os.OpenFile(currSt.filePath, os.O_RDONLY, 0600)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	newFile, err = os.OpenFile(newFilePath, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0600)
+	tmpFile, err = os.OpenFile(tmpFilePath, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	var prevNode, currNode, newNode *LsmNode
@@ -266,7 +282,7 @@ func mergeSsTable(log log.LogInterface, prevSt *SsTable, currSt *SsTable, newFil
 			err = prevNode.ReadFrom(prevFile)
 			if err != nil {
 				if err != io.EOF {
-					return nil, err
+					return err
 				}
 				prevFile.Close()
 				prevFile = nil
@@ -279,7 +295,7 @@ func mergeSsTable(log log.LogInterface, prevSt *SsTable, currSt *SsTable, newFil
 			err = currNode.ReadFrom(currFile)
 			if err != nil {
 				if err != io.EOF {
-					return nil, err
+					return err
 				}
 				currFile.Close()
 				currFile = nil
@@ -311,24 +327,16 @@ func mergeSsTable(log log.LogInterface, prevSt *SsTable, currSt *SsTable, newFil
 			}
 		}
 
-		err = newNode.WriteTo(newFile)
+		err = newNode.WriteTo(tmpFile)
 		if err != nil {
-			return nil, err
+			return err
 		}
 	}
 
-	err = newFile.Sync()
+	err = tmpFile.Sync()
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	newSt := new(SsTable)
-	newSt.log = log
-	newSt.filePath = newFilePath
-	newSt.file = newFile
-	err = newSt.index()
-	if err != nil {
-		return nil, err
-	}
-	return newSt, nil
+	return nil
 }
