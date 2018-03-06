@@ -91,7 +91,7 @@ func (lsm *Lsm) compact(force bool, logTruncate bool) error {
 
 func (lsm *Lsm) mergeSsTables() error {
 	lsm.ssTableMapLock.RLock()
-	if len(lsm.ssTableMap) <= 8 {
+	if len(lsm.ssTableMap) <= 1 {
 		lsm.ssTableMapLock.RUnlock()
 		return nil
 	}

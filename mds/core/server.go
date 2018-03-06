@@ -18,6 +18,7 @@ import (
 	filelog "ddb/lib/common/filelog"
 	log "ddb/lib/common/log"
 	"ddb/lib/common/lsm"
+	"ddb/lib/common/sequence"
 )
 
 type KeyValueStorage interface {
@@ -35,6 +36,12 @@ type MdsParameters struct {
 	StoragePath  string
 }
 
+type Stats struct {
+	getKey    *sequence.Sequence
+	setKey    *sequence.Sequence
+	deleteKey *sequence.Sequence
+}
+
 type Mds struct {
 	apiServer     *http.Server
 	debugServer   *http.Server
@@ -42,6 +49,7 @@ type Mds struct {
 	errorChannel  chan error
 	log           *log.Log
 	kvs           KeyValueStorage
+	stats         Stats
 }
 
 var globalMds Mds
@@ -109,12 +117,15 @@ func completeRequest(w http.ResponseWriter, requestId string, err error, v inter
 }
 
 func setKey(w http.ResponseWriter, r *http.Request) {
+	timeStart := time.Now()
+
 	var err error
 
 	req := &client.SetKeyRequest{}
 	resp := &client.BaseResponse{}
 	defer func() {
 		completeRequest(w, req.RequestId, err, resp)
+		GetMds().stats.setKey.Append(time.Since(timeStart).Seconds())
 	}()
 
 	vars := mux.Vars(r)
@@ -145,12 +156,15 @@ func setKey(w http.ResponseWriter, r *http.Request) {
 }
 
 func deleteKey(w http.ResponseWriter, r *http.Request) {
+	timeStart := time.Now()
+
 	var err error
 
 	req := &client.BaseRequest{}
 	resp := &client.BaseResponse{}
 	defer func() {
 		completeRequest(w, req.RequestId, err, resp)
+		GetMds().stats.deleteKey.Append(time.Since(timeStart).Seconds())
 	}()
 
 	err = decodeJson(w, r, req)
@@ -177,12 +191,14 @@ func deleteKey(w http.ResponseWriter, r *http.Request) {
 }
 
 func getKey(w http.ResponseWriter, r *http.Request) {
+	timeStart := time.Now()
 	var err error
 
 	req := &client.BaseRequest{}
 	resp := &client.GetKeyResponse{}
 	defer func() {
 		completeRequest(w, req.RequestId, err, resp)
+		GetMds().stats.getKey.Append(time.Since(timeStart).Seconds())
 	}()
 
 	err = decodeJson(w, r, req)
@@ -210,6 +226,20 @@ func getKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	return
+}
+
+func getStats(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+
+	stats := &GetMds().stats
+
+	fmt.Fprintf(w, "setKey count %d avg %f 50p %f 95p %f 99p %f\n",
+		stats.setKey.Count(), stats.setKey.GetAverage(), stats.setKey.Get50P(), stats.setKey.Get95P(), stats.setKey.Get99P())
+	fmt.Fprintf(w, "getKey count %d avg %f 50p %f 95p %f 99p %f\n",
+		stats.getKey.Count(), stats.getKey.GetAverage(), stats.getKey.Get50P(), stats.getKey.Get95P(), stats.getKey.Get99P())
+	fmt.Fprintf(w, "deleteKey count %d avg %f 50p %f 95p %f 99p %f\n",
+		stats.getKey.Count(), stats.deleteKey.GetAverage(), stats.deleteKey.Get50P(), stats.deleteKey.Get95P(), stats.deleteKey.Get99P())
 }
 
 func (mds *Mds) shutdown() {
@@ -272,6 +302,10 @@ func (mds *Mds) Run(params *MdsParameters) error {
 	}
 	mds.kvs = kvs
 
+	mds.stats.setKey = sequence.NewSequence()
+	mds.stats.getKey = sequence.NewSequence()
+	mds.stats.deleteKey = sequence.NewSequence()
+
 	if params.PidFile != "" {
 		f, err := os.OpenFile(params.PidFile, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0666)
 		if err != nil {
@@ -303,6 +337,7 @@ func (mds *Mds) Run(params *MdsParameters) error {
 	r.HandleFunc("/set/{key}", setKey).Methods("POST").HeadersRegexp("Content-Type", "application/json")
 	r.HandleFunc("/get/{key}", getKey).Methods("GET").HeadersRegexp("Content-Type", "application/json")
 	r.HandleFunc("/delete/{key}", deleteKey).Methods("POST").HeadersRegexp("Content-Type", "application/json")
+	r.HandleFunc("/stats", getStats).Methods("GET")
 
 	mds.debugServer = &http.Server{
 		Handler:      dr,

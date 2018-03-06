@@ -119,11 +119,6 @@ func TestLsmCreateOpen(t *testing.T) {
 
 	i = 0
 	for key, value := range kv {
-		_, ok := keysToDelete[key]
-		if ok {
-			continue
-		}
-
 		evalue, err := lsm.Get(key)
 		if err != nil {
 			if err == ErrNotFound {
@@ -141,7 +136,7 @@ func TestLsmCreateOpen(t *testing.T) {
 		}
 		i++
 
-		_, ok = keysToDelete[key]
+		_, ok := keysToDelete[key]
 		if ok {
 			t.Fatalf("key %s already deleted", key)
 			return
