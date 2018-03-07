@@ -91,7 +91,7 @@ func (lsm *Lsm) compact(force bool, logTruncate bool) error {
 
 func (lsm *Lsm) mergeSsTables() error {
 	lsm.ssTableMapLock.RLock()
-	if len(lsm.ssTableMap) <= 1 {
+	if len(lsm.ssTableMap) <= 8 {
 		lsm.ssTableMapLock.RUnlock()
 		return nil
 	}
@@ -313,13 +313,13 @@ func (lsm *Lsm) Background() {
 	for {
 		select {
 		case <-lsm.mergeTimer.C:
-			//lsm.mergeSsTables()
+			lsm.mergeSsTables()
 		case <-lsm.compactTimer.C:
 			//lsm.compact(false, true)
 			//lsm.mergeSsTables()
 		case <-lsm.compactChan:
 			lsm.compact(false, true)
-			lsm.mergeSsTables()
+			//lsm.mergeSsTables()
 		case <-lsm.stopChan:
 			return
 		}

@@ -18,7 +18,7 @@ type Sequence struct {
 
 func NewSequence() *Sequence {
 	s := new(Sequence)
-	s.data = make([]float64, 10000)
+	s.data = make([]float64, 0, 10000)
 	return s
 }
 
